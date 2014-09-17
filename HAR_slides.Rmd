@@ -1,0 +1,295 @@
+---
+title: "A Classifier for Human Activity Recognition"
+author: "Antonio Clavelli"
+date: "09/16/2014"
+output: ioslides_presentation
+---
+
+
+## Human Activity Recognition
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+The availability of devices such as Jawbone Up, Nike FuelBand, and Fitbit make now possible to collect a large amount of data about personal activity at relatively low costs. 
+
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE}
+setwd("/media/Windows/antokb/Coursera Practical_ML/project01/data/")
+# setwd("C:/antokb/Coursera Practical_ML/project01/data/")
+
+# install.packages("ggplot2")
+# install.packages("knitr")
+# install.packages("caret")
+library(ggplot2)
+library(knitr)
+library(caret)
+library(gbm)
+library(plyr)
+
+train <- read.csv("pml-training.csv", stringsAsFactors=FALSE)
+test <- read.csv("pml-testing.csv", stringsAsFactors=FALSE)
+
+# look at the data
+nun_test_row <- nrow( train)
+nun_test_col <- ncol( train)
+dim(test)
+
+library(png)
+img <- readPNG( "devices.png" )
+```
+
+```{r, echo=FALSE, fig.height=3}
+grid::grid.raster(img)
+```
+
+## Dataset
+
+In this project I use Wearable Accelerometers’ Data from the dataset provided at <http://groupware.les.inf.puc-rio.br/har>
+
+Description: six young health participants were asked to perform one set of 10 repetitions of the Unilateral  Dumbbell Biceps Curl in 5 different fashions: 
+
+- exactly according to the specification (Class A)
+- throwing the elbows to the front (Class B)
+- lifting the dumbbell only halfway (Class C) 
+- lowering the dumbbell only halfway (Class D) 
+- throwing the hips to the front (Class E)
+
+
+## Train data
+
+Train data have `r nun_test_col` variables and `r nun_test_row` measurements. Each measurements contains the participant name, time stamp information, a set of measurement from accelerometers, and the the 'Class' variable. 
+
+The objective is to predict the class variables, given a set of measurements, on an independent test set.
+
+
+
+## Train data
+
+Samples from the dataset: The variable named *classe* contains labels for the exercise quality execution, the variable *user_name* the identifiers for the subject performing the exercise:
+```{r}
+unique(train$classe)
+unique(train$user_name)
+```
+
+
+## Data cleaning 
+
+Some data variables seem to contain majority of NA values, empty strings “” or “#DIV/0!” values. Data variables representing averages, standard deviation, max, min operation will be removed. 
+
+In the following are listed the employed steps of data cleaning:
+
+First bind train and test set.
+```{r}
+train$setType <- 'train'
+test$setType <- 'test'
+names(test)[160] <- 'classe'
+alldata <- rbind(train, test)
+```
+
+
+##  
+
+Looking for missing values. Identify columns of NA values:
+```{r}
+res_na <- colSums( is.na(alldata) )
+```
+  
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+df <- data.frame( time = seq(length(res_na)), missing=res_na)
+ggplot(data=df, aes(x=time, y=missing, fill=missing)) + geom_bar(stat="identity") + 
+  geom_bar(stat="identity") +
+  xlab("Column index") +
+  ggtitle("Count of NA values per each column")
+```
+
+Remove the columns with almost all NA values. 
+```{r}
+alldata <- alldata[,res_na < 5000]
+sum(colSums(is.na(alldata)) )   # a few values NA remains
+```
+
+
+## 
+Looking for missing values, in the form of empty string
+```{r}
+res_na <- colSums( alldata == '', na.rm=T )
+
+```{r, echo=FALSE,  message=FALSE, warning=FALSE, fig.height=3}
+df <- data.frame( time = seq(length(res_na)), missing = res_na)
+ggplot(data=df, aes(x=time, y=missing, fill=missing)) + geom_bar(stat="identity") + 
+  geom_bar(stat="identity") +
+  xlab("Column index") +
+  ggtitle("Count of empty-string values per each column")
+```
+
+Remove columns with almost all "" values.
+```{r}
+alldata <- alldata[,res_na < 5000]
+```
+
+
+## Quick check
+```{r}
+# Count occurrence of "". Have been all removed?
+sum(colSums( alldata=='', na.rm=T )) == 0
+```
+
+```{r}
+# Count occurrence of "#DIV/0!". Have been all removed?
+sum( colSums( alldata=='#DIV/0!', na.rm=T)) == 0
+```
+
+```{r}
+# Count the occurrence of NA values. Have been all removed?
+sum( colSums( is.na(alldata)) ) == 0
+```
+
+
+
+## 
+NOTE: at this point only `r length(names( alldata))` variables remain. 
+And among them there are no columns corresponding to {avg, stddev, min, max values} measurements.
+```{r}
+selected_label <- sapply( names(alldata), function(x) gregexpr(pattern ='^(avg_|stddev_|min_|max_)', x)[[1]][1] > 0 )
+names(alldata)[selected_label]
+```
+
+Rename fist column
+```{r}
+names(alldata)[1]  <- 'counter'
+```
+
+
+## Split data in training and testing set
+```{r}
+training <- alldata[alldata$setType=='train',]
+testing <- alldata[alldata$setType=='test',]
+```
+
+```{r}
+nrow(training)
+nrow(testing)
+```
+
+
+```{r echo=FALSE, results='hide'}
+# Remove the cols named 'new_window', 'num_window' and 'setType', as they are not useful measurements 
+training <- training[,c(-6,-7,-61)]
+testing  <-  testing[,c(-6,-7,-61)]
+
+# Set back the column label 'problem_id' on the test-set
+names(testing)[58] <- 'problem_id'
+```
+
+
+
+
+## Codebook summary table
+```{r, echo=FALSE}
+codebook_df <- data.frame( varNames=names(training), description='a measurement', values='' )
+codebook_df$description <- as.character(  codebook_df$description )
+codebook_df$values      <- as.character(  codebook_df$values )
+
+codebook_df[ codebook_df$varNames=='classe',]$description <- 'the 5 different fashions of making the excercise. A: correct execution according to the specification, {B,C,D,E} are incorrect variations'
+codebook_df[ codebook_df$varNames=='classe',]$values      <-  "{A,B,C,D,E}"
+
+codebook_df[ codebook_df$varNames=='user_name',]$description <- 'the name of the subject making exrcise'
+codebook_df[ codebook_df$varNames=='user_name',]$values      <-  "{pedro, jeremy, adelmo, eurico, carlitos, charles}"
+
+codebook_df[ codebook_df$varNames=='counter',]$description <- 'a progressive counter of rows'
+codebook_df[ codebook_df$varNames=='counter',]$values      <-  "1 2 3 4 ...."
+
+codebook_df[ codebook_df$varNames=='raw_timestamp_part_1',]$description <- 'timestamp,  part 1 (not specified)'
+codebook_df[ codebook_df$varNames=='raw_timestamp_part_2',]$description <- 'timestamp, part 2 (not specified)'
+codebook_df[ codebook_df$varNames=='cvtd_timestamp',]$description <- 'a string representing date and time'
+```
+
+```{r, results="asis"}
+kable(codebook_df, format="markdown")
+```
+
+
+
+## Building models
+
+As I'm interested in a classification model, make *'classe'* a factor variable:
+```{r, results='hide', warning=FALSE}
+training$classe <- as.factor( training$classe )
+```
+
+For reproducibility purpose set seed to 313:
+```{r, results='hide', warning=FALSE}
+set.seed(313)
+```
+
+
+
+## Cross Validation and Out-of-Sample error estimate
+I split the data in two sets: a **training-set** and **trainTest-set** in respectively 80% and 20%.
+The trainTest-set is only used to make an *unbiased estimate of the out-of-sample error*. 
+
+I used the *k-fold cross validation* technique on the training-set to perform model selection. To keep computation time small, I chose values of K=3 and repeats=1. 
+
+Using the functionality of the caret package, I defined a trainControl parameter as:
+```{r, results='hide'}
+fitControl <- trainControl(method="repeatedcv", number=3, repeats=1 )
+```
+
+
+
+##
+
+NOTE:  I did not make feature selection. 
+I used all the available variables (after the data cleaning as in previous section) as predictive variables.
+
+Variables from 1 to 5 (the  "counter", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp") are discarded:
+```{r}
+dim_train = nrow(training)
+id_trainTest <- sample(dim_train, dim_train*0.2,   replace = FALSE )
+
+trainTest  <- training[id_trainTest,6:58]    # to extimate error
+training2  <- training[-id_trainTest,6:58]   # train and cross-validation
+testing    <- testing[,6:58]
+```
+
+
+
+## Fitting a **Gradient boosted model** 
+```{r cache=TRUE, fig.height=2.5}
+fit_gbm <- train(classe~., method="gbm", data=training2, trControl=fitControl, verbose=F)
+ggplot(fit_gbm)
+```
+
+Accuracy estimates against model parameters: The parameter interaction.depth ranged into {1,2,3} and the n.trees into {50,100,150}, the 'shrinkage' parameter was held constant at a value of 0.1.  **The final values used for the model were n.trees = 150, interaction.depth = 3 and shrinkage = 0.1**
+
+
+
+## In Class Accuracy
+```{r}
+pred_gbm  <-  predict(fit_gbm, training2[-53] )
+confusionMatrix(pred_gbm, training2$classe)   
+```
+
+## Out of Class Accuracy:
+```{r}
+pred_gbm  <-  predict(fit_gbm, trainTest[-53] )
+confusionMatrix(pred_gbm, trainTest$classe)   
+```
+
+
+
+## Prediction on the Test-set
+Outcomes prediction are computed as follows
+```{r, warning=FALSE}
+pred_testing_gbm <- predict(fit_gbm, testing[-53] )
+print(pred_testing_gbm)
+```
+
+
+## Conclusion
+Human Activity Recognition and activity quality assessment are active research areas with application in safety, health prevention and wellness.  This experiment shows that Machine learning technique and  Wearable Accelerometers' data can be effectively used to make reliable assessments of activity quality.
+
+
+Cite:
+
+- Ugulino, W., Cardador, D., Vega, K., Velloso, E., Milidiú, R., & Fuks, H. (2012). Wearable computing: accelerometers’ data classification of body postures and movements. In Advances in Artificial Intelligence-SBIA 2012 (pp. 52-61). Springer Berlin Heidelberg.
