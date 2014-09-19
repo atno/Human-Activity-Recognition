@@ -224,11 +224,11 @@ set.seed(313)
 
 
 
-## Cross Validation and Out-of-Sample error estimate
+## Out-of-Sample error estimate
 I split the data in two sets: a **training-set** and **trainTest-set** in respectively 80% and 20%.
 The trainTest-set is only used to make an *unbiased estimate of the out-of-sample error*. 
 
-I used the *k-fold cross validation* technique on the training-set to perform model selection. To keep computation time small, I chose values of K=3 and repeats=1. 
+I used the **k-fold cross validation** technique on the training-set to perform model selection. To keep computation time small, I chose values of K=3 and repeats=1. 
 
 Using the functionality of the caret package, I defined a trainControl parameter as:
 ```{r, results='hide'}
@@ -254,23 +254,27 @@ testing    <- testing[,6:58]
 
 
 
-## Fitting a **Gradient boosted model** 
+## Build a Gradient Boosted Model
 ```{r cache=TRUE, fig.height=2.5}
-fit_gbm <- train(classe~., method="gbm", data=training2, trControl=fitControl, verbose=F)
+fit_gbm <- train(classe~., method="gbm", data=training2, 
+                 trControl=fitControl, verbose=FALSE)
 ggplot(fit_gbm)
 ```
 
-Accuracy estimates against model parameters: The parameter interaction.depth ranged into {1,2,3} and the n.trees into {50,100,150}, the 'shrinkage' parameter was held constant at a value of 0.1.  **The final values used for the model were n.trees = 150, interaction.depth = 3 and shrinkage = 0.1**
+The model parameter were chosen by cross validation. The final values are n.trees = 150, interaction.depth = 3 and shrinkage = 0.1
 
 
 
-## In Class Accuracy
+## In-Sample Accuracy
+The error on the training-set is computed as:
 ```{r}
 pred_gbm  <-  predict(fit_gbm, training2[-53] )
 confusionMatrix(pred_gbm, training2$classe)   
 ```
 
-## Out of Class Accuracy:
+## Out-of-Sample Accuracy:
+The generalization error on the new data is computed as:
+(NOTE: the trainTest-set is never used in training the ML model)
 ```{r}
 pred_gbm  <-  predict(fit_gbm, trainTest[-53] )
 confusionMatrix(pred_gbm, trainTest$classe)   
